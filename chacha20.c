@@ -62,7 +62,6 @@ void chacha20_encrypt(const uint8_t *key, const uint8_t *nonce,
         (uint32_t)nonce[8] | ((uint32_t)nonce[9] << 8) | ((uint32_t)nonce[10] << 16) | ((uint32_t)nonce[11] << 24)
     };
 
-    // Rest of the function remains unchanged...
     uint8_t key_stream[64];
     size_t pos = 0;
     

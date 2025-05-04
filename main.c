@@ -1,5 +1,6 @@
 #include "aes.h"
 #include "chacha20.h"
+#include "rsa.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,8 +58,37 @@ void handle_padding(uint8_t **data, size_t *len, int mode, int cipher) {
 }
 
 int main(int argc, char **argv) {
+    // Handle RSA commands first
+    if (argc >= 2) {
+        if (strcmp(argv[1], "rsa-genkey") == 0) {
+            if (argc != 5) {
+                printf("Usage: %s rsa-genkey <bits> <public.key> <private.key>\n", argv[0]);
+                return 1;
+            }
+            return rsa_genkey(atoi(argv[2]), argv[3], argv[4]);
+        }
+        else if (strcmp(argv[1], "rsa-encrypt") == 0) {
+            if (argc != 5) {
+                printf("Usage: %s rsa-encrypt <public.key> <input> <output>\n", argv[0]);
+                return 1;
+            }
+            return rsa_encrypt_file(argv[2], argv[3], argv[4]);
+        }
+        else if (strcmp(argv[1], "rsa-decrypt") == 0) {
+            if (argc != 5) {
+                printf("Usage: %s rsa-decrypt <private.key> <input> <output>\n", argv[0]);
+                return 1;
+            }
+            return rsa_decrypt_file(argv[2], argv[3], argv[4]);
+        }
+    }
+
     if (argc != 6) {
-        printf("Usage: %s <encrypt/decrypt> <aes|chacha20> <input> <output> <key>\n", argv[0]);
+        printf("Usage for symmetric crypto: %s <encrypt/decrypt> <aes|chacha20> <input> <output> <key>\n", argv[0]);
+        printf("Usage for RSA:\n");
+        printf("  Generate keys: %s rsa-genkey <bits> <public.key> <private.key>\n", argv[0]);
+        printf("  Encrypt file: %s rsa-encrypt <public.key> <input> <output>\n", argv[0]);
+        printf("  Decrypt file: %s rsa-decrypt <private.key> <input> <output>\n", argv[0]);
         return 1;
     }
 
