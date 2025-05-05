@@ -15,17 +15,7 @@
 // NCurses color pairs
 enum { DEFAULT_PAIR = 1, TITLE_PAIR, ERROR_PAIR, HIGHLIGHT_PAIR };
 
-// Form field indices
-enum {
-    RSA_BITS, RSA_PUB, RSA_PRIV,
-    RSA_KEY, RSA_INPUT, RSA_OUTPUT,
-    SYM_CIPHER, SYM_KEY, SYM_INPUT, SYM_OUTPUT,
-    NUM_FIELDS
-};
-
 WINDOW *main_win;
-FORM *form;
-FIELD *fields[NUM_FIELDS + 1];
 
 uint8_t* read_file(const char *filename, size_t *len) {
     FILE *f = fopen(filename, "rb");
@@ -48,6 +38,34 @@ int write_file(const char *filename, uint8_t *data, size_t len) {
     return 0;
 }
 
+void show_message(const char *msg, int is_error) {
+    WINDOW *msg_win = newwin(3, COLS-4, LINES-4, 2);
+    wbkgd(msg_win, COLOR_PAIR(is_error ? ERROR_PAIR : HIGHLIGHT_PAIR));
+    box(msg_win, 0, 0);
+    mvwprintw(msg_win, 1, 2, "%s", msg);
+    wrefresh(msg_win);
+    napms(2000);
+    delwin(msg_win);
+    touchwin(stdscr);
+    refresh();
+}
+
+void init_ncurses() {
+    initscr();
+    start_color();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+
+    init_pair(DEFAULT_PAIR, COLOR_WHITE, COLOR_BLUE);
+    init_pair(TITLE_PAIR, COLOR_YELLOW, COLOR_BLUE);
+    init_pair(ERROR_PAIR, COLOR_WHITE, COLOR_RED);
+    init_pair(HIGHLIGHT_PAIR, COLOR_BLACK, COLOR_GREEN);
+
+    main_win = newwin(LINES, COLS, 0, 0);
+    wbkgd(main_win, COLOR_PAIR(DEFAULT_PAIR));
+}
+
 void handle_padding(uint8_t **data, size_t *len, int mode, int cipher) {
     if (cipher == CIPHER_AES) {
         if (mode == 0) {
@@ -68,59 +86,6 @@ void handle_padding(uint8_t **data, size_t *len, int mode, int cipher) {
             if (valid) *len -= pad;
         }
     }
-}
-
-void show_message(const char *msg, int is_error) {
-    WINDOW *msg_win = newwin(3, COLS-4, LINES-4, 2);
-    wbkgd(msg_win, COLOR_PAIR(is_error ? ERROR_PAIR : HIGHLIGHT_PAIR));
-    box(msg_win, 0, 0);
-    mvwprintw(msg_win, 1, 2, "%s", msg);
-    wrefresh(msg_win);
-    napms(2000);
-    delwin(msg_win);
-    touchwin(stdscr);
-    refresh();
-}
-
-void init_form_fields() {
-    for (int i = 0; i < NUM_FIELDS; i++) fields[i] = new_field(1, 64, i, 0, 0, 0);
-    fields[NUM_FIELDS] = NULL;
-    form = new_form(fields);
-    post_form(form);
-    refresh();
-}
-
-void init_ncurses() {
-    initscr();
-    start_color();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-
-    if (LINES < 24 || COLS < 80) {
-        endwin();
-        fprintf(stderr, "Terminal too small! Minimum 80x24 required.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    init_pair(DEFAULT_PAIR, COLOR_WHITE, COLOR_BLUE);
-    init_pair(TITLE_PAIR, COLOR_YELLOW, COLOR_BLUE);
-    init_pair(ERROR_PAIR, COLOR_WHITE, COLOR_RED);
-    init_pair(HIGHLIGHT_PAIR, COLOR_BLACK, COLOR_GREEN);
-
-    main_win = newwin(LINES, COLS, 0, 0);
-    wbkgd(main_win, COLOR_PAIR(DEFAULT_PAIR));
-    init_form_fields();
-}
-
-void cleanup_ncurses() {
-    if (form) {
-        unpost_form(form);
-        free_form(form);
-    }
-    for (int i = 0; fields[i]; i++) free_field(fields[i]);
-    delwin(main_win);
-    endwin();
 }
 
 void rsa_generate_keys() {
@@ -232,7 +197,7 @@ void main_menu() {
     while (1) {
         werase(main_win);
         box(main_win, 0, 0);
-        mvwprintw(main_win, 1, 2, "Crypto Toolkit - NCurses Edition");
+        mvwprintw(main_win, 1, 2, "Crypto Toolkit - NCurses");
 
         for (int i = 0; i < n_choices; ++i) {
             if (i == highlight) wattron(main_win, COLOR_PAIR(HIGHLIGHT_PAIR));
@@ -271,6 +236,5 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     init_ncurses();
     main_menu();
-    cleanup_ncurses();
     return 0;
 }
