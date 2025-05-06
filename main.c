@@ -117,8 +117,21 @@ void rsa_process_file(int encrypt) {
 }
 
 void aes_encrypt() {
-    uint8_t key[32] = {0};
-    uint8_t iv[16] = {0};
+    size_t key_len;
+    uint8_t *key = read_file("aes.key", &key_len);
+    if (!key) {
+        show_message("Failed to read AES key file (aes.key)", 1);
+        return;
+    }
+    if (key_len != 16) {
+        show_message("AES key must be 16 bytes", 1);
+        free(key);
+        return;
+    }
+    uint8_t iv[16];
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    fread(iv, 1, 16, urandom);
+    fclose(urandom);
     size_t len;
     uint8_t *data = read_file("message.txt", &len);
     if (!data) { show_message("Failed to read message.txt", 1); return; }
@@ -132,7 +145,17 @@ void aes_encrypt() {
 }
 
 void aes_decrypt() {
-    uint8_t key[32] = {0};
+    size_t key_len;
+    uint8_t *key = read_file("aes.key", &key_len);
+    if (!key) {
+        show_message("Failed to read AES key file (aes.key)", 1);
+        return;
+    }
+    if (key_len != 16) {
+        show_message("AES key must be 16 bytes", 1);
+        free(key);
+        return;
+    }
     size_t len;
     uint8_t *data = read_file("encrypted_aes.bin", &len);
     if (!data || len < 16) { show_message("Invalid AES input file", 1); return; }
@@ -148,8 +171,21 @@ void aes_decrypt() {
 }
 
 void chacha_encrypt() {
-    uint8_t key[32] = {0};
-    uint8_t nonce[12] = {0};
+    size_t key_len;
+    uint8_t *key = read_file("chacha20.key", &key_len);
+    if (!key) {
+        show_message("Failed to read ChaCha20 key file (chacha20.key)", 1);
+        return;
+    }
+    if (key_len != 32) {
+        show_message("ChaCha20 key must be 32 bytes", 1);
+        free(key);
+        return;
+    }
+    uint8_t nonce[12];
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    fread(nonce, 1, 12, urandom);
+    fclose(urandom);
     uint32_t counter = 0;
     size_t len;
     uint8_t *data = read_file("message.txt", &len);
@@ -164,7 +200,17 @@ void chacha_encrypt() {
 }
 
 void chacha_decrypt() {
-    uint8_t key[32] = {0};
+    size_t key_len;
+    uint8_t *key = read_file("chacha20.key", &key_len);
+    if (!key) {
+        show_message("Failed to read ChaCha20 key file (chacha20.key)", 1);
+        return;
+    }
+    if (key_len != 32) {
+        show_message("ChaCha20 key must be 32 bytes", 1);
+        free(key);
+        return;
+    }
     uint32_t counter = 0;
     size_t len;
     uint8_t *data = read_file("encrypted_cha.bin", &len);
