@@ -16,12 +16,27 @@ int rsa_genkey(int bits, const char *pubfile, const char *privfile) {
     mpz_t p, q, n, phi, e, d;
     gmp_randstate_t st;
     gmp_randinit_default(st);
-    gmp_randseed_ui(st, (unsigned long)time(NULL));
+    uint32_t seed;
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    fread(&seed, sizeof(seed), 1, urandom);
+    fclose(urandom);
+    gmp_randseed_ui(st, seed);
 
     mpz_inits(p, q, n, phi, e, d, NULL);
-    // generate two distinct primes p, q
-    do { mpz_urandomb(p, st, bits/2); mpz_nextprime(p, p); } while(0);
-    do { mpz_urandomb(q, st, bits/2); mpz_nextprime(q, q); } while(mpz_cmp(p,q)==0);
+
+    // generate prime p (with explicit primality check)
+    do {
+        mpz_urandomb(p, st, bits/2);    // random number
+        mpz_nextprime(p, p);            // find next prime ≥ p
+    } while (!is_prime(p));
+
+    // generate distinct prime q (with explicit check)
+    do {
+        do {
+            mpz_urandomb(q, st, bits/2);
+            mpz_nextprime(q, q);
+        } while (!is_prime(q));
+    } while (mpz_cmp(p, q) == 0);
 
     // n = p*q
     mpz_mul(n, p, q);
@@ -59,6 +74,7 @@ int rsa_encrypt_file(const char *pubfile, const char *infile, const char *outfil
     mpz_t n, e, m, c;
     mpz_inits(n, e, m, c, NULL);
     
+    // Read public key
     FILE *f = fopen(pubfile, "r");
     if (!f) {
         fprintf(stderr, "Can't open public key %s: %s\n", pubfile, strerror(errno));
@@ -72,45 +88,55 @@ int rsa_encrypt_file(const char *pubfile, const char *infile, const char *outfil
     fclose(f);
 
     FILE *in = fopen(infile, "rb");
-    if (!in) {
-        fprintf(stderr, "Can't open input %s: %s\n", infile, strerror(errno));
-        return -1;
-    }
-
+    if (!in) return -1;
     FILE *out = fopen(outfile, "wb");
-    if (!out) {
-        fprintf(stderr, "Can't create output %s: %s\n", outfile, strerror(errno));
-        fclose(in);
-        return -1;
-    }
+    if (!out) { fclose(in); return -1; }
 
     size_t k = (mpz_sizeinbase(n, 2) + 7) / 8;
-    size_t bs = k - 11;  // Leave space for PKCS#1 v1.5 padding (even if not implemented)
-    uint8_t *buf = malloc(bs);
-    if (!buf) {
-        fprintf(stderr, "Memory error\n");
-        fclose(in);
-        fclose(out);
-        return -1;
-    }
+    size_t max_pt = k - 11;  // PKCS#1 v1.5 max plaintext size
+    
+    uint8_t *pt_block = malloc(max_pt);
+    uint8_t *padded_block = malloc(k);
 
-    size_t r;
-    while ((r = fread(buf, 1, bs, in)) > 0) {
-        mpz_import(m, r, 1, 1, 0, 0, buf);
-        mpz_powm(c, m, e, n);
+    while (1) {
+        size_t r = fread(pt_block, 1, max_pt, in);
+        if (r == 0) break;
+
+        // Build PKCS#1 v1.5 padded block
+        padded_block[0] = 0x00;
+        padded_block[1] = 0x02;
         
-        uint8_t *cbuf = malloc(k);
-        if (!cbuf) {
-            fprintf(stderr, "Memory error\n");
-            break;
+        // Generate random non-zero padding (length = k - r - 3)
+        size_t padding_len = k - r - 3;
+        FILE *urandom = fopen("/dev/urandom", "rb");
+        fread(padded_block + 2, 1, padding_len, urandom);
+        fclose(urandom);
+
+        // Ensure no zero bytes in padding
+        for (size_t i = 2; i < 2 + padding_len; i++) {
+            while (padded_block[i] == 0) {
+                padded_block[i] = (uint8_t)rand() % 255 + 1;
+            }
         }
+
+        // Add delimiter and plaintext
+        padded_block[2 + padding_len] = 0x00;
+        memcpy(padded_block + 3 + padding_len, pt_block, r);
+
+        // Encrypt
+        mpz_import(m, k, 1, 1, 0, 0, padded_block);
+        mpz_powm(c, m, e, n);
+
+        // Write ciphertext
+        uint8_t *cbuf = malloc(k);
         size_t count;
         mpz_export(cbuf, &count, 1, 1, 0, 0, c);
         fwrite(cbuf, 1, k, out);
         free(cbuf);
     }
 
-    free(buf);
+    free(pt_block);
+    free(padded_block);
     fclose(in);
     fclose(out);
     mpz_clears(n, e, m, c, NULL);
@@ -121,57 +147,58 @@ int rsa_decrypt_file(const char *privfile, const char *infile, const char *outfi
     mpz_t n, d, m, c;
     mpz_inits(n, d, m, c, NULL);
 
+    // Read private key
     FILE *f = fopen(privfile, "r");
-    if (!f) {
-        fprintf(stderr, "Can't open private key %s: %s\n", privfile, strerror(errno));
-        return -1;
-    }
-    if (gmp_fscanf(f, "%Zx %Zx", n, d) != 2) {
-        fprintf(stderr, "Invalid private key format\n");
-        fclose(f);
+    if (!f || gmp_fscanf(f, "%Zx %Zx", n, d) != 2) {
+        fprintf(stderr, "Key read error\n");
         return -1;
     }
     fclose(f);
 
     FILE *in = fopen(infile, "rb");
-    if (!in) {
-        fprintf(stderr, "Can't open input %s: %s\n", infile, strerror(errno));
-        return -1;
-    }
-
     FILE *out = fopen(outfile, "wb");
-    if (!out) {
-        fprintf(stderr, "Can't create output %s: %s\n", outfile, strerror(errno));
-        fclose(in);
-        return -1;
-    }
+    if (!in || !out) return -1;
 
     size_t k = (mpz_sizeinbase(n, 2) + 7) / 8;
     uint8_t *buf = malloc(k);
-    if (!buf) {
-        fprintf(stderr, "Memory error\n");
-        fclose(in);
-        fclose(out);
-        return -1;
-    }
+    uint8_t *padded_block = calloc(1, k);
 
-    size_t r;
-    while ((r = fread(buf, 1, k, in)) > 0) {
-        mpz_import(c, r, 1, 1, 0, 0, buf);
+    while (fread(buf, 1, k, in) == k) {
+        // Decrypt
+        mpz_import(c, k, 1, 1, 0, 0, buf);
         mpz_powm(m, c, d, n);
-        
-        uint8_t *mbuf = malloc(k);
-        if (!mbuf) {
-            fprintf(stderr, "Memory error\n");
-            break;
-        }
+
+        // Extract padded block (preserve leading zeros)
         size_t count;
-        mpz_export(mbuf, &count, 1, 1, 0, 0, m);
-        fwrite(mbuf, 1, count, out);
-        free(mbuf);
+        mpz_export(padded_block + (k - mpz_sizeinbase(m, 256)), &count, 1, 1, 0, 0, m);
+
+        // Validate PKCS#1 padding
+        if (padded_block[0] != 0x00 || padded_block[1] != 0x02) {
+            fprintf(stderr, "Invalid padding header\n");
+            free(padded_block);
+            free(buf);
+            return -1;
+        }
+
+        // Find 0x00 delimiter
+        size_t delim = 2;
+        while (delim < k && padded_block[delim] != 0x00) delim++;
+        
+        if (delim >= count - 1) {
+            fprintf(stderr, "Invalid padding (no delimiter)\n");
+            free(padded_block);
+            free(buf);
+            return -1;
+        }
+
+        // Write plaintext
+        size_t pt_len = k - delim - 1;
+        fwrite(padded_block + delim + 1, 1, pt_len, out);
+        memset(padded_block, 0, k); // Reset buffer
     }
 
     free(buf);
+    free(padded_block);
     fclose(in);
     fclose(out);
     mpz_clears(n, d, m, c, NULL);
