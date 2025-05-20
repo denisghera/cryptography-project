@@ -94,47 +94,60 @@ int rsa_encrypt_file(const char *pubfile, const char *infile, const char *outfil
 
     size_t k = (mpz_sizeinbase(n, 2) + 7) / 8;
     size_t max_pt = k - 11;  // PKCS#1 v1.5 max plaintext size
-    
+
     uint8_t *pt_block = malloc(max_pt);
     uint8_t *padded_block = malloc(k);
+
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    if (!urandom) {
+        fprintf(stderr, "Failed to open /dev/urandom\n");
+        return -1;
+    }
 
     while (1) {
         size_t r = fread(pt_block, 1, max_pt, in);
         if (r == 0) break;
 
-        // Build PKCS#1 v1.5 padded block
+        // PKCS#1 v1.5 padding
         padded_block[0] = 0x00;
         padded_block[1] = 0x02;
-        
-        // Generate random non-zero padding (length = k - r - 3)
         size_t padding_len = k - r - 3;
-        FILE *urandom = fopen("/dev/urandom", "rb");
-        fread(padded_block + 2, 1, padding_len, urandom);
-        fclose(urandom);
-
-        // Ensure no zero bytes in padding
-        for (size_t i = 2; i < 2 + padding_len; i++) {
-            while (padded_block[i] == 0) {
-                padded_block[i] = (uint8_t)rand() % 255 + 1;
+        size_t filled = 0;
+        while (filled < padding_len) {
+            uint8_t b;
+            if (fread(&b, 1, 1, urandom) != 1) {
+                fprintf(stderr, "Failed to read from urandom\n");
+                return -1;
+            }
+            if (b != 0x00) {
+                padded_block[2 + filled] = b;
+                filled++;
             }
         }
 
-        // Add delimiter and plaintext
         padded_block[2 + padding_len] = 0x00;
         memcpy(padded_block + 3 + padding_len, pt_block, r);
 
         // Encrypt
-        mpz_import(m, k, 1, 1, 0, 0, padded_block);
+        mpz_import(m, k, 1, 1, 1, 0, padded_block);  // big-endian
         mpz_powm(c, m, e, n);
 
-        // Write ciphertext
-        uint8_t *cbuf = malloc(k);
+        // Export ciphertext
+        uint8_t *cbuf = calloc(1, k);
         size_t count;
-        mpz_export(cbuf, &count, 1, 1, 0, 0, c);
+        mpz_export(cbuf, &count, 1, 1, 1, 0, c);  // big-endian
+
+        // Ensure we write exactly k bytes (pad with leading 0s if needed)
+        if (count < k) {
+            memmove(cbuf + (k - count), cbuf, count);
+            memset(cbuf, 0, k - count);
+        }
+
         fwrite(cbuf, 1, k, out);
         free(cbuf);
     }
 
+    fclose(urandom);
     free(pt_block);
     free(padded_block);
     fclose(in);
@@ -162,19 +175,30 @@ int rsa_decrypt_file(const char *privfile, const char *infile, const char *outfi
     size_t k = (mpz_sizeinbase(n, 2) + 7) / 8;
     uint8_t *buf = malloc(k);
     uint8_t *padded_block = calloc(1, k);
+    uint8_t *tmp = malloc(k); // Temporary buffer for mpz_export
 
     while (fread(buf, 1, k, in) == k) {
         // Decrypt
         mpz_import(c, k, 1, 1, 0, 0, buf);
         mpz_powm(m, c, d, n);
 
-        // Extract padded block (preserve leading zeros)
+        // Extract padded block using temporary buffer to get accurate byte count
         size_t count;
-        mpz_export(padded_block + (k - mpz_sizeinbase(m, 256)), &count, 1, 1, 0, 0, m);
+        mpz_export(tmp, &count, 1, 1, 0, 0, m);
+        memset(padded_block, 0, k); // Reset to zeros
+        if (count > k) {
+            fprintf(stderr, "Decrypted data larger than modulus size\n");
+            free(tmp);
+            free(padded_block);
+            free(buf);
+            return -1;
+        }
+        memcpy(padded_block + (k - count), tmp, count);
 
         // Validate PKCS#1 padding
         if (padded_block[0] != 0x00 || padded_block[1] != 0x02) {
             fprintf(stderr, "Invalid padding header\n");
+            free(tmp);
             free(padded_block);
             free(buf);
             return -1;
@@ -184,8 +208,9 @@ int rsa_decrypt_file(const char *privfile, const char *infile, const char *outfi
         size_t delim = 2;
         while (delim < k && padded_block[delim] != 0x00) delim++;
         
-        if (delim >= count - 1) {
+        if (delim >= k - 1) {
             fprintf(stderr, "Invalid padding (no delimiter)\n");
+            free(tmp);
             free(padded_block);
             free(buf);
             return -1;
@@ -194,9 +219,9 @@ int rsa_decrypt_file(const char *privfile, const char *infile, const char *outfi
         // Write plaintext
         size_t pt_len = k - delim - 1;
         fwrite(padded_block + delim + 1, 1, pt_len, out);
-        memset(padded_block, 0, k); // Reset buffer
     }
 
+    free(tmp);
     free(buf);
     free(padded_block);
     fclose(in);
